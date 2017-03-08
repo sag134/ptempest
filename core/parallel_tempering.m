@@ -137,7 +137,7 @@ if (new_chain)
     energy_chain    = zeros(cfg.nchains, cfg.nswaps+1);               % energy samples 
     step_acceptance = zeros(cfg.nchains, cfg.nswaps,cfg.nparams);   % number of accepted steps (per chain per swap per parameter)
     swap_acceptance = zeros(cfg.nchains-1, cfg.nswaps); % number of accepted swaps (per chain per swap)
-    relstep_history = zeros(cfg.nchains, cfg.nswaps);   % relstep history
+    relstep_history = zeros(cfg.nchains, cfg.nparams, cfg.nswaps);   % relstep history
     beta_history    = zeros(cfg.nchains, cfg.nswaps);   % beta history
     swap_time       = zeros(cfg.nswaps,1);              % time per swap
 
@@ -234,9 +234,9 @@ for swap_idx = start_swap : cfg.nswaps
             parameter_order = randperm(cfg.nparams);
             %at each step, cycle through all the parameters in this
             %randomized order
-            for p_idx_no = 1:cfg.params
+            for p_idx_no = 1:cfg.nparams
                 % get proposed parameters
-                p_idx = parameter_order(p_idx_np); %parameter index
+                p_idx = parameter_order(p_idx_no); %parameter index
                 params_prop = params_curr(chain_idx,:); %obtain current list of parameters
                 %Make a proposed change to the current parameter.
                 params_prop(p_idx) = params_prop(p_idx)+epsilon(chain_idx,p_idx)*randn(); %this is basically what the proposal function was, except that its now for just one parameter.

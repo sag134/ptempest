@@ -308,7 +308,7 @@ for swap_idx = start_swap : cfg.nswaps
     if ( mod(swap_idx, cfg.adapt_relstep_interval)==0  &&  mod(swap_idx, cfg.adapt_beta_interval)~=0  &&  swap_idx <= cfg.adapt_last )
         %step size is updated per parameter
         for p_idx = 1:cfg.nparams
-            [relative_step_size(:,pdx)] = adapt_relstep( relative_step_size(:,pdx), step_acceptance(:,:,pdx), swap_idx, cfg );
+            [relative_step_size(:,p_idx)] = adapt_relstep( relative_step_size(:,p_idx), step_acceptance(:,:,pdx), swap_idx, cfg );
         end
         epsilon = update_stepsize_fcn(relative_step_size);
     end

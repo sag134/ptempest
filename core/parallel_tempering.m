@@ -76,8 +76,15 @@ for file_idx = 1: length(progress_files)
     params_curr = params_chain(:,:,last_swap+1);
     energy_curr = energy_chain(:,last_swap+1);
     % epsilon = proposal stepsize array
-    epsilon = cfg.update_stepsize_fcn( relative_step_size );
+   
+    %relative_step_size was initially an array of dimensions 1 x nchain. I have
+    %modified this to be an array of dimensions nparams x nchain, so there is a
+    %separate step size per parameter.
 
+    %epsilon is an array of dimensions nparams x nchain. update_step_size
+    %was a repmat function which no longer needs to be applied
+    epsilon = relative_step_size; %cfg.update_stepsize_fcn( relative_step_size ); 
+    
     % what if there is more than one progress file??
     break;
 end
@@ -128,7 +135,7 @@ if (new_chain)
     % allocate space for chain data
     params_chain    = zeros(cfg.nchains, cfg.nparams, cfg.nswaps+1);  % parameter samples
     energy_chain    = zeros(cfg.nchains, cfg.nswaps+1);               % energy samples 
-    step_acceptance = zeros(cfg.nchains, cfg.nswaps);   % number of accepted steps (per chain per swap)
+    step_acceptance = zeros(cfg.nchains, cfg.nswaps,cfg.nparams);   % number of accepted steps (per chain per swap per parameter)
     swap_acceptance = zeros(cfg.nchains-1, cfg.nswaps); % number of accepted swaps (per chain per swap)
     relstep_history = zeros(cfg.nchains, cfg.nswaps);   % relstep history
     beta_history    = zeros(cfg.nchains, cfg.nswaps);   % beta history
@@ -148,7 +155,7 @@ if (new_chain)
         beta                = init.beta;
         relative_step_size  = init.relstep;
         % epsilon = proposal stepsize array
-        epsilon = update_stepsize_fcn( relative_step_size );
+        epsilon = relative_step_size;%update_stepsize_fcn( relative_step_size );
         % initialize chains
         params_curr = init.params;
         params_chain(:,:,1) = params_curr;
@@ -167,9 +174,10 @@ if (new_chain)
         % initialize beta and relative step size
         %beta = ((cfg.beta_init).^[0:(cfg.nchains-1)])';  % beta = inverse chain temperature
         beta = cfg.max_beta * (cfg.beta_init.^[0:(cfg.nchains-1)])';   % beta = inverse chain temperature
-        relative_step_size = cfg.relstep_init./beta;      % relative step size w.r.t. log-parameter interval
+        relative_step_size = repmat(cfg.relstep_init./beta,1,cfg.nparams);     % relative step size w.r.t. log-parameter interval
         % epsilon = proposal stepsize array
-        epsilon = update_stepsize_fcn(relative_step_size);
+        epsilon = relative_step_size;
+        epsilon(:,cfg.param_scale==0) = 0; %param_scale = 0 implies a fixed parameter. Step size 0.
         % initialize chains
         [energy_curr, params_curr] = init_chains( epsilon, cfg );
         params_chain(:,:,1) = params_curr;
@@ -198,7 +206,7 @@ if (cfg.parallel)
     % start labs
     nlabs = min( [cfg.maxlabs, cfg.nchains] );
     fprintf(1,'[ nlabs=%d ]\n', nlabs );
-    matlabpool( 'local', nlabs );
+    parpool( 'local', nlabs );
     spmd
         % initialize random number stream for each lab
 	    RandStream.setGlobalStream( labstreams{labindex} );
@@ -215,31 +223,38 @@ fprintf(1,'Running chains...\n');
 % ---- loop over swaps ------------------------------------------------
 start_swap = last_swap + 1;
 for swap_idx = start_swap : cfg.nswaps
-
     tic;
-
     % ---- loop over chains -----------------------------------------------
     n_accept_steps = zeros(cfg.nchains,1);
     parfor chain_idx = 1 : cfg.nchains
-
+        myTemp = zeros(1,cfg.nparams);
         % ---- loop over MCMC steps between swaps -----------------------------
         for step_idx = 1 : cfg.nsteps
-    
-            % get proposed parameters
-            params_prop = proposal_fcn( params_curr(chain_idx,:), epsilon(chain_idx,:) );
-            % compute proposed energy     
-            energy_prop = energy_fcn(params_prop);
-            % ACCEPT/REJECT
-            delta_energy = energy_prop - energy_curr(chain_idx);
-            % acceptance probability:
-            h = min(1, exp(-beta(chain_idx) * delta_energy));
-            if (rand < h)
-                % accept proposal!
-                params_curr(chain_idx,:) = params_prop;
-                energy_curr(chain_idx) = energy_prop;
-                step_acceptance(chain_idx,swap_idx) = step_acceptance(chain_idx,swap_idx) + 1; 
+            %obtain randomized order of parameters
+            parameter_order = randperm(cfg.nparams);
+            %at each step, cycle through all the parameters in this
+            %randomized order
+            for p_idx_no = 1:cfg.params
+                % get proposed parameters
+                p_idx = parameter_order(p_idx_np); %parameter index
+                params_prop = params_curr(chain_idx,:); %obtain current list of parameters
+                %Make a proposed change to the current parameter.
+                params_prop(p_idx) = params_prop(p_idx)+epsilon(chain_idx,p_idx)*randn(); %this is basically what the proposal function was, except that its now for just one parameter.
+                %params_prop = proposal_fcn( params_curr(chain_idx,:), epsilon(chain_idx,:) );
+                % compute proposed energy     
+                energy_prop = energy_fcn(params_prop);
+                % ACCEPT/REJECT
+                delta_energy = energy_prop - energy_curr(chain_idx);
+                % acceptance probability:
+                h = min(1, exp(-beta(chain_idx) * delta_energy));
+                if (rand < h)
+                    % accept proposal!
+                    params_curr(chain_idx,:) = params_prop;
+                    energy_curr(chain_idx) = energy_prop;
+                    myTemp(p_idx) = myTemp(p_idx)+1; %per paramter acceptance rate
+                end
             end
-
+            step_acceptance(chain_idx,swap_idx,:) = myTemp;
         % ---------------------------------------------------------------------
         end  % loop over MCMC steps between swaps
 
@@ -271,7 +286,7 @@ for swap_idx = start_swap : cfg.nswaps
     % ---- save chain -----------------------------------------------------
     params_chain(:,:,swap_idx+1)  = params_curr;
     energy_chain(:,swap_idx+1)    = energy_curr;
-    relstep_history(:,swap_idx)   = relative_step_size;
+    relstep_history(:,:,swap_idx)   = relative_step_size;
     beta_history(:,swap_idx)      = beta;
 
     % remember that this swap was completed
@@ -288,10 +303,13 @@ for swap_idx = start_swap : cfg.nswaps
         fprintf(1,'  total time = %.2f sec\n', sum(swap_time(1:swap_idx)) );
         display_chains( last_swap, cfg, beta, relative_step_size, step_acceptance, swap_acceptance, energy_chain );
     end
-
+    
     % ---- adapt step size ------------------------------------------------ 
     if ( mod(swap_idx, cfg.adapt_relstep_interval)==0  &&  mod(swap_idx, cfg.adapt_beta_interval)~=0  &&  swap_idx <= cfg.adapt_last )
-        [relative_step_size] = adapt_relstep( relative_step_size, step_acceptance, swap_idx, cfg );
+        %step size is updated per parameter
+        for p_idx = 1:cfg.nparams
+            [relative_step_size(:,pdx)] = adapt_relstep( relative_step_size(:,pdx), step_acceptance(:,:,pdx), swap_idx, cfg );
+        end
         epsilon = update_stepsize_fcn(relative_step_size);
     end
 
